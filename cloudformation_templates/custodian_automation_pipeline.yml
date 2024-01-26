@@ -1,0 +1,1015 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: Service Catalog Configuration
+        Parameters:
+          - pPortfolioProviderName
+          - pSCPortfolioName
+          - pSCLaunchConstraintRoleName
+      - Label:
+          default: Service Catalog Bucket Configuration
+        Parameters:
+          - pSCTemplateS3Bucket
+          - pSCTemplateS3LoggingBucket
+          - pOrganizationID
+      - Label:
+          default: CodePipeline Configuration
+        Parameters:
+          - pPipelineName
+          - pCodeCommitRepoName
+          - pCodepipelineArtifactBucket
+Parameters:
+  pSCTemplateS3Bucket:
+    Description: The s3 Bucket that will hold the Cloudformation template for the custodian service catalog product
+    Type: String
+  pSCTemplateS3LoggingBucket:
+    Description: The S3 Bucket that will be logging bucket for the Custodian policy bucket
+    Type: String
+  pSCPortfolioName:
+    Description: The Portfolio that will hold the custodian service catalog products. 
+    Type: String
+  pSCLaunchConstraintRoleName:
+    Description: The Launch constraint Role for the provisioning the service catalog products. 
+    Type: String
+  pPortfolioProviderName:
+    Type: String
+    Description: The Team that is offering the custodian product to the end users in the Organization
+  pPipelineName:
+    Description: Name of the pipeline that manages the product deployment
+    Type: String
+  pCodeCommitRepoName:
+    Type: String
+    Description: Name of the code commit repo you want to create
+    MaxLength: 30
+  pCodepipelineArtifactBucket:
+    Description: The S3 bucket that will hold the codepipeline artifacts
+    Type: String
+  pOrganizationID:
+    Description: The Organization ID to allow GetObject for template s3 Bucket
+    Type: String
+Resources:
+  # Custodian Service catalog Infrastructure Resources
+  rCustodianSCTemplateBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub ${pSCTemplateS3Bucket}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref rCustodianSCTemplateLoggingBucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+           EventBridgeEnabled: true
+
+  rCustodianSCTemplateLoggingBucket:
+    Type: "AWS::S3::Bucket"
+    # checkov:skip=CKV_AWS_18: This is the logging bucket itself for baseline bucket
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: This is the logging bucket itself for baseline bucket
+    Properties:
+      BucketName: !Sub ${pSCTemplateS3LoggingBucket}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  rCustodianSCTemplateLoggingBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref rCustodianSCTemplateLoggingBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: SSEAndSSLPolicy
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: !Sub "arn:aws:s3:::${rCustodianSCTemplateLoggingBucket}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  rCustodianSCTemplateBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F16
+            reason: Access restricted by the condition statement, where the principal must belong within the organization
+    Properties:
+      Bucket: !Ref rCustodianSCTemplateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: SSEAndSSLPolicy
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: !Sub "arn:aws:s3:::${rCustodianSCTemplateBucket}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: AllowGetObjectOrganization
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${rCustodianSCTemplateBucket}/*"
+            Condition:
+              StringEquals:
+                aws:PrincipalOrgID: [!Ref pOrganizationID]
+
+  rCustodianSCProductCreationLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W92
+              reason: Reserved Concurrency not needed for this function
+            - id: W89
+              reason: No VPC access required for rCustodianSCProductCreationLambda
+    # checkov:skip=CKV_AWS_117:No VPC access required for rCustodianSCProductCreationLambda
+    # checkov:skip=CKV_AWS_115:Reserved concurrency is not needed
+    # checkov:skip=CKV_AWS_116:No Dead-Letter Queue needed for rCustodianSCProductCreationLambda. Retries handled by user
+    # checkov:skip=CKV_AWS_173:No sensitive data passed in environment variable
+    Properties:
+      Description: Lambda Function to Create Service catalog Product for custodian policies
+      FunctionName: CustodianSCProductCreationLambda
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Timeout: 120
+      Role:
+        Fn::GetAtt:
+          - rCustodianSCProductCreationLambdaExecutionRole
+          - Arn
+      Runtime: python3.11
+      Environment:
+        Variables:
+          CustodianHubPortfolioName: !Ref pSCPortfolioName
+          LaunchConstraintRole: !Ref pSCLaunchConstraintRoleName
+          RegionName: !Sub ${AWS::Region}
+          PortfolioProvider: !Ref pPortfolioProviderName
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+          import botocore
+
+          LOGGER = logging.getLogger()
+          LOGGER.setLevel(logging.INFO)
+          Custodian_Portfolio_name = os.getenv("CustodianHubPortfolioName")
+          region_name = os.getenv("RegionName")
+          Launch_Constraint_Role = os.getenv("LaunchConstraintRole")
+          Portfolio_Provider = os.getenv("PortfolioProvider")
+
+          service_catalog_client = boto3.client("servicecatalog")
+          s3_client = boto3.client("s3")
+
+
+          # Lambda Handler to manage Service catalog Product 
+
+          def lambda_handler(event, context):
+              LOGGER.info(event)
+              LOGGER.info(context)
+              if ".yml" in event['detail']['object']['key']:
+                try:
+                    PortfolioId = get_portfolio_id()
+                    Bucket = event['detail']['bucket']['name']
+                    ProductFile = event['detail']["object"]["key"].split("/")[-1]
+                    ProductName = ProductFile.split(".")[0]
+                    ObjectKey = event['detail']["object"]["key"]
+                    ObjectVersionID = event['detail']["object"]["version-id"]
+                    Version = get_policy_version(Bucket, ObjectKey, ObjectVersionID)
+                    if Version == '1':
+                        Product_id = create_product(Version, ProductName, ObjectKey, ObjectVersionID, Bucket)
+                        associate_add_constraint(Product_id, PortfolioId, Launch_Constraint_Role, ProductName, Bucket)
+                    else: 
+                        create_product_version(Version, ProductName, ObjectKey, ObjectVersionID, Bucket)
+                except botocore.exceptions.ClientError as error:
+                    raise error
+              else:
+                LOGGER.info("Non yml template pushed to custodian policy bucket")
+
+          # Function to get the Portfolio Id 
+
+          def get_portfolio_id():
+              LOGGER.info(f"Getting the Portfolio Id of {Custodian_Portfolio_name}")
+              portfolioid=''
+              try:
+                  portfolio_response = service_catalog_client.list_portfolios()
+                  for each_portfolio in portfolio_response['PortfolioDetails']:
+                      if each_portfolio['DisplayName'] == Custodian_Portfolio_name:
+                          portfolioid = each_portfolio['Id']
+              except botocore.exceptions.ClientError as error:
+                  raise error
+              return portfolioid
+
+          # Function to get s3 Object version from the metadata 
+
+          def get_policy_version(Bucket, ObjectKey, ObjectVersion):
+              try:
+                  LOGGER.info(f"Getting the Policy version from Metadata of {ObjectKey}")
+                  s3_key_resp = s3_client.get_object(Bucket=Bucket, Key=ObjectKey, VersionId=ObjectVersion)
+                  return s3_key_resp['Metadata']['version']
+              except botocore.exceptions.ClientError as error:
+                  raise error
+          
+          # Create Service Catalog Product for the Custodian 
+
+          def create_product(Version, ProductName, ObjectKey, ObjectVersionID, Bucket):
+              try:
+                  LOGGER.info(f"Creating the Service Catalog Product {ProductName}")
+                  if region_name == 'us-east-1':
+                      Product_V1 = service_catalog_client.create_product(
+                          Name= "custodian-" + ProductName,
+                          Owner=Portfolio_Provider,
+                          Distributor=Portfolio_Provider,
+                          ProductType='CLOUD_FORMATION_TEMPLATE',
+                          ProvisioningArtifactParameters={
+                              'Name': "V" + Version,
+                              'Description': f'Version {Version} for Custodian Product {ProductName}',
+                              'Type': 'CLOUD_FORMATION_TEMPLATE',
+                              'Info': {
+                                  'LoadTemplateFromURL': f"https://{Bucket}.s3.amazonaws.com/{ObjectKey}?versionId={ObjectVersionID}"
+                              }
+                          }
+                      )
+                  else: 
+                      Product_V1 = service_catalog_client.create_product(
+                          Name= "custodian-" + ProductName,
+                          Owner=Portfolio_Provider,
+                          Distributor=Portfolio_Provider,
+                          ProductType='CLOUD_FORMATION_TEMPLATE',
+                          ProvisioningArtifactParameters={
+                              'Name': "V" + Version,
+                              'Description': f'Version {Version} for Custodian Product {ProductName}',
+                              'Info': {
+                                  'LoadTemplateFromURL': f"https://{Bucket}.s3.{region_name}.amazonaws.com/{ObjectKey}?versionId={ObjectVersionID}"
+                              },
+                              'Type': 'CLOUD_FORMATION_TEMPLATE'
+                          }
+                      )
+                  return Product_V1['ProductViewDetail']['ProductViewSummary']['ProductId']
+              except botocore.exceptions.ClientError as error:
+                  LOGGER.error("The Creation of Service catalog Product failed due to {error}")
+                  raise error
+
+          # Create Service catalog Product version for the existing Product 
+
+          def create_product_version(Version, ProductName, ObjectKey, ObjectVersionID, Bucket):
+              try:
+                  product_response = service_catalog_client.describe_product(Name="custodian-" + ProductName)
+                  product_id = product_response['ProductViewSummary']['ProductId']
+                  exist_artifacts=product_response['ProvisioningArtifacts']
+                  for each_artifact in exist_artifacts:
+                      if each_artifact['Guidance'] != 'DEPRECATED':
+                          LOGGER.info(f"Adding Deprecation for the Artifact {each_artifact['Id']}")
+                          service_catalog_client.update_provisioning_artifact(
+                              ProductId=product_id,
+                              ProvisioningArtifactId=each_artifact['Id'],
+                              Name=each_artifact['Name'],
+                              Description=each_artifact['Description'],
+                              Guidance='DEPRECATED'
+                          )
+                  if region_name == 'us-east-1':
+                      LOGGER.info(f"Create Product Version for {ProductName}")
+                      service_catalog_client.create_provisioning_artifact(
+                          ProductId=product_id,
+                          Parameters={
+                              'Name': "V" + Version,
+                              'Description': f'Version {Version} for Custodian Product {ProductName}',
+                              'Type': 'CLOUD_FORMATION_TEMPLATE',
+                              'Info': {
+                                  'LoadTemplateFromURL': f"https://{Bucket}.s3.amazonaws.com/{ObjectKey}?versionId={ObjectVersionID}"
+                              }
+                          }
+                      )
+                  else:
+                      LOGGER.info(f"Create Product Version for {ProductName}")
+                      service_catalog_client.create_provisioning_artifact(
+                          ProductId=product_id,
+                          Parameters={
+                              'Name': "V" + Version,
+                              'Description': f'Version {Version} for Custodian Product {ProductName}',
+                              'Type': 'CLOUD_FORMATION_TEMPLATE',
+                              'Info': {
+                                  'LoadTemplateFromURL': f"https://{Bucket}.s3.{region_name}.amazonaws.com/{ObjectKey}?versionId={ObjectVersionID}"
+                              }
+                          }
+                      )
+              except botocore.exceptions.ClientError as error:
+                  LOGGER.error(f"Create Product Version for {ProductName}  failed due to {error}")
+                  raise error
+
+          # Associate Product to Portofolio and add Launch Constraint 
+
+          def associate_add_constraint(Product_id, PortfolioId, LocalRoleName, ProductName, Bucket):
+              try:
+                  LOGGER.info(f"Associating the Service Catalog Product {ProductName} to the Portfolio {PortfolioId}")
+                  service_catalog_client.associate_product_with_portfolio(
+                      ProductId=Product_id,
+                      PortfolioId=PortfolioId
+                  )
+                  LOGGER.info(f"Creating Launch Constraint for the Service Catalog Product {ProductName}")
+                  service_catalog_client.create_constraint(
+                      PortfolioId=PortfolioId,
+                      ProductId=Product_id,
+                      Parameters= "{\"LocalRoleName\": \"%s\"}" % (LocalRoleName),
+                      Type='LAUNCH',
+                      Description=f'Launch Constraint for the Product {ProductName}'
+                  )
+              except botocore.exceptions.ClientError as error:
+                  LOGGER.error(f"Associate Product to Portofolio and add Launch Constraint failed due to {error}")
+                  raise error
+
+  rCustodianSCAutomationEventbridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: The Event bridge Rule to invoke the SC Product Creation Lambda when Custodian policy CFN template uploaded
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - 'Object Created'
+        detail:
+          bucket:
+            name:
+              - !Ref rCustodianSCTemplateBucket
+      Name: Custodian-Object-Lambda-Invocation-Rule
+      Targets:
+        - Arn: !GetAtt rCustodianSCProductCreationLambda.Arn
+          Id: EventbridgeLambdaTagetforCustodian
+
+  rObjectCreateEventInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref rCustodianSCProductCreationLambda
+      Principal: events.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !GetAtt rCustodianSCAutomationEventbridgeRule.Arn
+
+  rCustodianSCProductCreationLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W11
+              reason: Required in this case
+    Properties:
+      Description: Iam Role for Lambda Execution
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Sid: lambda
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      RoleName: ExecutionRoleForCustodianProductCreation
+      Policies:
+        - PolicyName: ExecutionPolicyForCustodianProductCreation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteAccessSC
+                Effect: Allow
+                Action:
+                  - "servicecatalog:CreateProduct"
+                  - "servicecatalog:CreateConstraint"
+                  - "servicecatalog:AssociateProductWithPortfolio"
+                  - "servicecatalog:CreateProvisioningArtifact"
+                  - "servicecatalog:UpdateProvisioningArtifact"
+                Resource: "*"
+              - Sid: ValidatePermissionsCFN
+                Effect: Allow
+                Action: 
+                  - "cloudformation:ValidateTemplate"
+                Resource: "*"
+              - Sid: IAMPassRolePermissions
+                Effect: Allow
+                Action:
+                  - "iam:GetRole"
+                  - "iam:PassRole"
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${pSCLaunchConstraintRoleName}
+              - Sid: ReadAccessSC
+                Effect: Allow
+                Action:
+                  - "servicecatalog:Describe*"
+                  - "servicecatalog:ListPortfolios"
+                Resource: "*"
+              - Sid: ReadAccessS3
+                Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:GetObjectAcl"
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${pSCTemplateS3Bucket}-${AWS::AccountId}/*"
+
+
+  # CodePipeline Infrastructure Resources
+  
+  ################################ CODECOMMIT REPO ################################
+  # You may pass your own repo name as a parameter instead of creating a new one.
+  rCodeCommitRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryDescription: Repo For cloud custodian Policies. 
+      RepositoryName: !Ref pCodeCommitRepoName
+  
+  rProductPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      Name: !Sub "${pPipelineName}-pipeline" # Update with the name of the pipeline
+      ArtifactStore:
+        Type: S3
+        Location: !Ref rCodepipelineArtifactBucket
+      RoleArn: !GetAtt rCodePipelineRole.Arn
+      Stages:
+        - Name: CodeCommit-Source
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: !GetAtt rCodeCommitRepo.Name
+                BranchName: main
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceArtifacts
+        - Name: Custodian-Validate
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifacts
+              Name: Custodian-validate
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rCodeBuildValidateProject
+              RunOrder: 2
+        - Name: Custodian-SAM-Conversion
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifacts
+              Name: Custodian-sam-convert
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rCodeBuildSamConvertProject
+              RunOrder: 3
+      RestartExecutionOnUpdate: true
+
+  rCodePipelineRole:
+    Type: AWS::IAM::Role
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      RoleName: !Sub ${pPipelineName}-CodePipeline-Role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        -
+          Effect: Allow
+          Action:
+            - sts:AssumeRole
+          Principal:
+            Service:
+              # Only CodePipeline service can assume this role
+              # No one else can assume this role
+              - codepipeline.amazonaws.com
+
+  rCodePipelinePolicy:
+    DependsOn: 
+      - rCFExecutionPolicy
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W11
+              reason: Required in this case
+            - id: W12
+              reason: Required in this case
+            - id: W13
+              reason: Required in this case. Added condition constraint to restrict access within Organization
+            - id: F40
+              reason: Added condition constraint to restrict access within Organization
+            - id: F5
+              reason: Required in this case. Restricted to KMS, S3 and Cloudformation services
+    Properties:
+      Description: Allows cloudformation to create/update/delete IAM Roles
+      ManagedPolicyName: !Sub ${pPipelineName}-CodePipeline-Policy
+      Roles:
+        - !Ref rCodePipelineRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -  # Allow codepipeline to perform encryption and decryption
+            Sid: KMSPolicy
+            Effect: Allow
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:List*
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:Generate*
+            Resource:
+              - !GetAtt rCodePipelineKMSKey.Arn
+          -  # Allow codepipeline to get from our repos
+            Sid: CodeCommitPermissions
+            Effect: Allow
+            Action:
+              - codecommit:GetBranch
+              - codecommit:GetCommit
+              - codecommit:UploadArchive
+              - codecommit:GetUploadArchiveStatus
+              - codecommit:CancelUploadArchive
+            Resource:
+              - !GetAtt rCodeCommitRepo.Arn
+          -  # Allow codepipeline to list and get objects from any bucket
+            Sid: S3BucketPolicy
+            Effect: Allow
+            Action:
+              - s3:GetBucket*
+              - s3:ListBucket*
+            Resource:
+              - !GetAtt rCodepipelineArtifactBucket.Arn
+          -  # Allow codepipeline to put and get objects from codepipeline service buckets
+            Sid: S3ObjectPolicy
+            Effect: Allow
+            Action:
+              - s3:AbortMultipartUpload
+              - s3:GetObject*
+              - s3:PutObject*
+              - s3:DeleteObject*
+              - s3:RestoreObject
+              - s3:ListMultipartUploadParts
+            Resource:
+              - !Sub ${rCodepipelineArtifactBucket.Arn}/*
+          -  # Allow codepipeline to pass role to codebuild
+            Sid: PassRolePolicy
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - '*'
+            Condition:
+              StringEquals:
+                aws:PrincipalOrgID: [!Ref pOrganizationID]
+          -  # Allow codepipeline to start codebuild
+            Sid: CodeBuildPolicy
+            Effect: Allow
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource:
+              - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/*"
+          -  # Allow code build to assume deployment role
+            Sid: AssumeDeploymentRolePolicy
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !GetAtt rCFExecutionRole.Arn
+          -  # To create CF stack for serverless deployment
+            Sid: CloudFormationFullAccess
+            Effect: Allow
+            Action:
+              - cloudformation:*
+            Resource: '*'
+
+  rCodePipelineEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        -
+          PolicyName: eb-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${rProductPipeline}
+  rCodePipelineEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: codepipleine-Invocation-Rule
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - 'CodeCommit Repository State Change'
+        resources:
+          - !GetAtt rCodeCommitRepo.Arn
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Targets:
+        - Arn: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${rProductPipeline}
+          RoleArn: !GetAtt rCodePipelineEventRole.Arn
+          Id: codepipeline-AppPipeline
+ 
+  ############################# PRE-REQUISITES FOR PIPELINE ################################
+
+  rCodepipelineArtifactBucket:
+    Type: "AWS::S3::Bucket"
+    # checkov:skip=CKV_AWS_18: This is the codepipeline artifact bucket so no logging enabled
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: This is the logging bucket itself for baseline bucket
+    Properties:
+      BucketName: !Sub ${pCodepipelineArtifactBucket}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  rCodePipelineKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for pipeline S3 bucket encryption
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+          Version: '2012-10-17'
+          Id: codepipeline-key
+          Statement:
+            - Sid: KmsAllowKeyAdministration
+              Effect: Allow
+              Principal:
+                AWS:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:root
+              Action:
+                - 'kms:*'
+              Resource: '*'
+            - Sid: KmsAllowKeyUsage
+              Effect: Allow
+              Principal:
+                AWS:
+                  - !GetAtt rCodePipelineRole.Arn
+              Action:
+                - kms:Decrypt
+                - kms:DescribeKey
+                - kms:Encrypt
+                - kms:GenerateDataKey
+                - kms:GenerateDataKeyWithoutPlainText
+                - kms:ReEncrypt
+                - kms:ReEncryptTo
+                - kms:ReEncryptFrom
+                - kms:TagResource
+                - kms:CreateKey
+              Resource: '*'
+
+  rCodePipelineKMSAlias:
+    Type: AWS::KMS::Alias
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      AliasName: alias/custodianblog/codepipeline-key
+      TargetKeyId: !GetAtt rCodePipelineKMSKey.Arn
+
+
+  rCFExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      RoleName: !Sub ${pPipelineName}-cf-execution-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  rCFExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W11
+              reason: Required in this case
+            - id: W12
+              reason: Required in this case
+            - id: W13
+              reason: Required in this case. Added condition constraint to restrict access within Organization
+            - id: F40
+              reason: Added condition constraint to restrict access within Organization
+            - id: F5
+              reason: Required in this case
+    Properties:
+      Description: Allows pipeline in master account to deploy Lambda
+      ManagedPolicyName: !Sub ${pPipelineName}-cf-execution-policy
+      Roles:
+        - !Ref rCFExecutionRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -  # Allow codepipeline to perform encryption and decryption on artifacts deployed to Serverless Deployment bucket
+            Sid: KMSPolicy
+            Effect: Allow
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:List*
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:Generate*
+            Resource:
+              - !GetAtt rCodePipelineKMSKey.Arn
+          - Sid: IAMRolesPermissions
+            # Needed for creating Roles for Lambdas, EC2 instances and other services
+            Effect: Allow
+            Action:
+              - iam:Get*
+              - iam:List*
+              - iam:*Role*
+              - iam:CreatePolicy
+              - iam:DeletePolicy
+              - iam:*PolicyVersion*
+              - iam:*InstanceProfile*
+            Resource: '*'
+          - Sid: S3FullAccess
+            # To Get and Put deployment artifacts in serverless deployment bucket
+            Effect: Allow
+            Action:
+              - s3:*
+            Resource: '*'
+          -  # To create CF stack for serverless deployment
+            Sid: CloudFormationFullAccess
+            Effect: Allow
+            Action:
+              - cloudformation:*
+            Resource: '*'
+          - # Lambda Full Access
+            Sid: LambdaFullAccess
+            Effect: Allow
+            Action:
+              - lambda:*
+            Resource: '*'
+          - Sid: Cloudwatch
+            # To access cloudwatch logs
+            Effect: Allow
+            Action:
+              - cloudwatch:*
+              - logs:*
+              - events:*
+            Resource: '*'
+          - # CodeDeploy Full Access for SAM deployment
+            Sid: CodeDeployFullAccess
+            Effect: Allow
+            Action:
+              - codedeploy:*
+            Resource: '*'
+
+  
+  ##############  CODE BUILD CODE BEGINS ####################
+
+
+  rCodeBuildValidateProject:
+    DependsOn:
+    - rCodeBuildPolicy
+    Properties:
+      Artifacts:
+        Location: !Ref rCodepipelineArtifactBucket
+        Name: 'validate-build-output.zip'
+        NamespaceType: BUILD_ID
+        Packaging: ZIP
+        Path: 'codebuild'
+        Type: S3
+      Description: 'CodeBuild Project for Custodian Validate'
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/standard:5.0'
+        Type: LINUX_CONTAINER
+      Name: custodian-validate
+      ServiceRole: !Ref rCodeBuildRole
+      Source:
+        Type: CODECOMMIT
+        Location: !Join
+          - ''
+          - - 'https://git-codecommit.'
+            - !Ref 'AWS::Region'
+            - '.amazonaws.com/v1/repos/'
+            - !GetAtt rCodeCommitRepo.Name
+        BuildSpec: 'buildspecs/build-spec-validate.yml'
+    Type: AWS::CodeBuild::Project
+  
+  rCodeBuildSamConvertProject:
+    DependsOn:
+    - rCodeBuildPolicy
+    Properties:
+      Artifacts:
+        Location: !Ref rCodepipelineArtifactBucket
+        Name: 'Samconvert-build-output.zip'
+        NamespaceType: BUILD_ID
+        Packaging: ZIP
+        Path: 'codebuild'
+        Type: S3
+      Description: CodeBuild Project for Custodian SAM Convert
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/standard:5.0'
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: Custodian_Template_Bucket
+            Type: PLAINTEXT
+            Value: !Ref rCustodianSCTemplateBucket
+          - Name: Custodian_Repo
+            Type: PLAINTEXT
+            Value: !Ref pCodeCommitRepoName
+      Name: custodian-sam-convert
+      ServiceRole: !Ref rCodeBuildRole
+      Source:
+        Type: CODECOMMIT
+        Location: !Join
+          - ''
+          - - 'https://git-codecommit.'
+            - !Ref 'AWS::Region'
+            - '.amazonaws.com/v1/repos/'
+            - !GetAtt rCodeCommitRepo.Name
+        BuildSpec: 'buildspecs/build-spec-sam.yml'
+    Type: AWS::CodeBuild::Project
+
+  rCodeBuildRole:
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+      Path: /
+      ManagedPolicyArns:
+           - arn:aws:iam::aws:policy/AWSCodeCommitPowerUser
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodeBuild
+    Type: AWS::IAM::Role
+
+  rCodeBuildPolicy:
+    Properties:
+      Roles:
+            - !Ref rCodeBuildRole
+      PolicyDocument:
+        Statement:
+        - Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Effect: Allow
+          Resource: '*'
+        - Action: s3:ListBucket
+          Effect: Allow
+          Resource:
+            - !GetAtt rCustodianSCTemplateBucket.Arn
+            - !GetAtt rCodepipelineArtifactBucket.Arn
+        - Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:GetObjectVersion
+          Effect: Allow
+          Resource:
+          - !Join
+            - ''
+            - - 'arn:aws:s3:::'
+              - !Ref rCustodianSCTemplateBucket
+              - /*
+          - !Join
+            - ''
+            - - 'arn:aws:s3:::'
+              - !Ref rCodepipelineArtifactBucket
+              - /*
+        - Action:
+          - codecommit:GitPull
+          Effect: Allow
+          Resource:
+          - !Join
+            - ':'
+            - - arn
+              - aws
+              - codecommit
+              - !Ref 'AWS::Region'
+              - !Ref 'AWS::AccountId'
+              - !GetAtt rCodeCommitRepo.Name
+      PolicyName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - rCodeBuildPolicy
+    Type: AWS::IAM::Policy
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W12
+              reason: Required in this case
+
+
+Outputs:
+  SCS3Bucket:
+    Description: The s3 bucket that will hold all the custodian policies
+    Value: !Ref rCustodianSCTemplateBucket
+  SCCustodianAutomationLambda:
+    Description: The Lambda function that will create Service catalog product for the custodian policies
+    Value: !Ref rCustodianSCProductCreationLambda
+  SCCustodianRepository:
+    Description: The Repository that will hold the custodian policies
+    Value: !GetAtt rCodeCommitRepo.Name
+  SCCustodianAutomationPipeline:
+    Description: The pipeline that will convert custodian policy into service catalog product
+    Value: !Ref rProductPipeline

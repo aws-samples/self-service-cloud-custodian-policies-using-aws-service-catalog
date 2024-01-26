@@ -1,0 +1,115 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: The Cloudformation StackSet template that will be leveraged to provision the Launch constraint role in spoke accounts.
+Resources:
+  CustodianPortfolioRequiredPermissions:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W11
+              reason: Required in this case
+            - id: W13
+              reason: Required in this case. Added condition constraint
+    Properties:
+      Description: Permissions for to launch the cloudformation stack in Service catalog product
+      ManagedPolicyName: "Custodian.ServiceCatalog.PortfolioRequired"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource: "*"
+            Action:
+              - "s3:GetObject"
+            Condition:
+              StringEquals:
+                "s3:ExistingObjectTag/servicecatalog:provisioning": "true"
+
+  CustodianProductLaunchRequiredPermissions:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W13
+              reason: Required in this case.
+    Properties:
+      Description: Permissions to provision AWS Service present in the Service catalog product
+      ManagedPolicyName: "Custodian.ServiceCatalog.ServiceLaunchPermissions"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:custodian-*
+            Action:
+              - "lambda:CreateFunction"
+              - "lambda:DeleteFunction"
+              - "lambda:UpdateFunctionCode"
+              - "lambda:TagResource"
+              - "lambda:UnTagResource"
+              - "lambda:GetFunction"
+              - "lambda:AddPermission"
+              - "lambda:RemovePermission"
+            Sid: LambdaCreationPermission
+          - Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::custodian-*
+            Action:
+              - "s3:Get*"
+          - Effect: Allow
+            Resource: "*"
+            Action: 
+              - "events:PutRule"
+              - "events:DescribeRule"
+              - "events:DescribeRule"
+              - "events:PutTargets"
+            Sid: EventBridgeRuleCreationPermission
+          - Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/custodian-*
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/*
+            Action:
+              - "iam:GetRole"
+              - "iam:DeleteRole"
+              - "iam:UpdateAssumeRolePolicy"
+              - "iam:PassRole"
+              - "iam:TagRole"
+              - "iam:UntagRole"
+              - "iam:CreateRole"
+              - "iam:PutRolePolicy"
+              - "iam:GetPolicy"
+              - "iam:CreatePolicy"
+              - "iam:ListPolicyVersions"
+              - "iam:DeletePolicy"
+              - "iam:DeleteRolePolicy"
+              - "iam:AttachRolePolicy"
+              - "iam:DetachRolePolicy"
+              - "iam:GetRolePolicy"
+            Sid: IAMRoleCreationPermission
+
+  CustodianServiceCatalogPortfolioRole:
+    Type: "AWS::IAM::Role"
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+    Properties:
+      RoleName: CustodianServiceCatalogPortfolioRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: servicecatalog.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref CustodianPortfolioRequiredPermissions
+        - !Ref CustodianProductLaunchRequiredPermissions
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess

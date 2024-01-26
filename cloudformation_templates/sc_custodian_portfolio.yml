@@ -1,0 +1,362 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: The Cloudformation template that launches the cloud custodian Portfolio that will be shared with the AWS Organization
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: Organization & Account Details
+        Parameters:
+          - TargetOU
+      - Label:
+          default: Service Catalog Configuration
+        Parameters:
+          - Version
+          - PortfolioName
+Parameters:
+  TargetOU:
+    Type: String
+    Description: Organization Unit (OU) id to which the Custodian Portfolio needs to be shared, More than one OU can be used and should be comma separated
+
+  PortfolioName:
+    Type: String
+    Description: The Portfolio name for the portfolio that will host the Custodian portfolio
+    Default: CustodianPoliciesPortfolio
+
+  Version:
+    Type: String
+    Description: Parameter to trigger the custom resource update. Please change this value every time you want to trigger the update logic of custom resource
+    Default: 1
+
+  PortfolioProviderName:
+    Type: String
+    Description: The Team that is offering the custodian product to the end users in the Organization
+    Default: FinOps
+
+  PortfolioSSOAccess:
+    Type: String
+    Description: The SSO Prefix that will be provided access to the Portfolio
+    Default: AWSReservedSSO_AWSAdministratorAccess
+
+  PortfolioLambdaRoleAccess:
+    Type: String
+    Description: The Lambda Role to be provided access to the portfolio
+    Default: ExecutionRoleForCustodianProductCreation
+
+Resources:
+  # Custom Resource to invoke portfolio share Lambda
+
+  CustodianHubPortfoliocustomresource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CustodianPortfolioShareLambda.Arn
+      DummyVersion: !Ref Version
+
+  ##### Portfolio Resources #####
+
+  CustodianHubPortfolio:
+    Type: AWS::ServiceCatalog::Portfolio
+    Properties:
+      AcceptLanguage: en
+      Description: Portfolio for Custodian Policies Service Catalog Product
+      DisplayName: !Ref PortfolioName
+      ProviderName: !Ref PortfolioProviderName
+
+  #Lambda exec role
+  CustodianPortfolioShareLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W28
+              reason: Explicit naming allowed for this particular resource
+            - id: W11
+              reason: Required in this case
+
+    Properties:
+      Description: Iam Role for Lambda Execution
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Sid: lambda
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      RoleName: ExecutionRoleForCustodianPortfolioShare
+      Policies:
+        - PolicyName: ExecutionPolicyForCustodianPortfolioShare
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "organizations:ListDelegatedAdministrators"
+                  - "organizations:ListParents"
+                  - "organizations:ListChildren"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "servicecatalog:CreatePortfolioShare"
+                  - "servicecatalog:DeletePortfolioShare"
+                  - "servicecatalog:DescribePortfolioShares"
+                Resource: !Join
+                  - ""
+                  - - "arn:"
+                    - !Ref AWS::Partition
+                    - ":catalog:"
+                    - !Ref AWS::Region
+                    - ":"
+                    - !Ref AWS::AccountId
+                    - ":portfolio/"
+                    - !Ref CustodianHubPortfolio
+  PortfolioAccess:
+    Type: AWS::ServiceCatalog::PortfolioPrincipalAssociation
+    Properties:
+      AcceptLanguage: en
+      PortfolioId: !Ref CustodianHubPortfolio
+      PrincipalARN: !Sub "arn:${AWS::Partition}:iam:::role/aws-reserved/sso.amazonaws.com/${PortfolioSSOAccess}*"
+      PrincipalType: IAM_PATTERN
+  
+  PortfolioLambdaAccess:
+    Type: AWS::ServiceCatalog::PortfolioPrincipalAssociation
+    Properties:
+      AcceptLanguage: en
+      PortfolioId: !Ref CustodianHubPortfolio
+      PrincipalARN: !Sub "arn:${AWS::Partition}:iam:::role/${PortfolioLambdaRoleAccess}"
+      PrincipalType: IAM_PATTERN
+  
+  CustodianPortfolioShareLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W92
+              reason: Reserved Concurrency not needed for this function
+            - id: W89
+              reason: No VPC access required for CustodianPortfolioShareLambda
+    # checkov:skip=CKV_AWS_117:No VPC access required for CustodianPortfolioShareLambda
+    # checkov:skip=CKV_AWS_115:Reserved concurrency is not needed
+    # checkov:skip=CKV_AWS_116:No Dead-Letter Queue needed for CustodianPortfolioShareLambda. Retries handled by user.
+    # checkov:skip=CKV_AWS_173:No sensitive data passed in environment variable
+    Properties:
+      Description: Lambda Function to share the Custodian Service Catalog Portfolio
+      FunctionName: CustodianPortfolioShareLambda
+      Handler: "index.lambda_handler"
+      MemorySize: 128
+      Timeout: 120
+      Role:
+        Fn::GetAtt:
+          - CustodianPortfolioShareLambdaExecutionRole
+          - Arn
+      Runtime: python3.12
+      Environment:
+        Variables:
+          CustodianHubPortfolioId: !Ref CustodianHubPortfolio
+          OrganizationalUnit:
+            Ref: TargetOU
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import logging, sys, traceback
+          import urllib3
+          import os
+          import time
+          from os import path
+          http = urllib3.PoolManager()
+          from botocore.exceptions import ClientError
+          from urllib.parse import unquote
+          # Setting base-config for Logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          sc_client = boto3.client('servicecatalog')
+          custodian_hub_portfolio_id  = (os.environ['CustodianHubPortfolioId'])
+          organizational_unit= (os.environ['OrganizationalUnit'])
+
+          SUCCESS = "SUCCESS"
+          FAILED = "FAILED"
+          def sendResponse(event, context, responseStatus, responseData, reason=None, physical_resource_id=None):
+              responseBody = {'Status': responseStatus,
+                              'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,
+                              'PhysicalResourceId': physical_resource_id or context.log_stream_name,
+                              'StackId': event['StackId'],
+                              'RequestId': event['RequestId'],
+                              'LogicalResourceId': event['LogicalResourceId'],
+                              'Data': responseData}
+              print ('RESPONSE BODY:n' + json.dumps(responseBody))
+              responseUrl = event['ResponseURL']
+              json_responseBody = json.dumps(responseBody)
+              headers = {
+                  'content-type' : '',
+                  'content-length' : str(len(json_responseBody))
+              }
+              try:
+                  response = http.request('PUT', responseUrl, headers=headers, body=json_responseBody)
+                  #response = response.send(responseUrl, data=json_responseBody, headers=headers)
+                  print ("Status code: " +response.reason)
+              except Exception as e:
+                  print ("send(..) failed executing requests.put(..): " + str(e))
+          def get_share_status(share_token):
+              try:
+                  response = sc_client.describe_portfolio_share_status(
+                      PortfolioShareToken=share_token
+                  )
+                  keep_checking = ['NOT_STARTED', 'IN_PROGRESS']
+                  completed = ['COMPLETED']
+                  error = ['COMPLETED_WITH_ERRORS', 'ERROR']
+                  if 'Status' in response:
+                      while response.get('Status', None) in keep_checking:
+                          sleep(2)
+                          response = sc_client.describe_portfolio_share_status(
+                              PortfolioShareToken=share_token
+                          )
+                      if response['Status'] in completed:
+                          return True
+                      elif response['Status'] in error:
+                          if response['ShareDetails']['ShareErrors'][0]['Error'] == 'DuplicateResourceException':
+                              logger.info(response['ShareDetails']['ShareErrors'][0]['Message'])
+                              return True
+                          else:
+                              logger.error("An error occurred, status is {}, details are: {}".format(response['Status'],
+                                                                                                      response['ShareDetails']))
+                              return False
+              except Exception as e:
+                  # If any other exceptions which we didn't expect are raised
+                  # then fail and log the exception message.
+                  logger.error("Error getting portfolio share status: {}".format(e))
+                  raise
+          def delete_portfolio_share(portfolio_id, org_unit=None):
+              try:
+                  logger.info("Deleting share for org unit {} for portfolio: {}".format(org_unit, portfolio_id))
+                  response = sc_client.delete_portfolio_share(
+                      PortfolioId=portfolio_id,
+                      OrganizationNode={
+                          'Type': 'ORGANIZATIONAL_UNIT',
+                          'Value': org_unit
+                      }
+                  )
+                  if 'PortfolioShareToken' in response:
+                      status = get_share_status(response['PortfolioShareToken'])
+                      if status:
+                          return True
+                      else:
+                          logger.error("No PortfolioShareToken returned in response.")
+                          raise ("No PortfolioShareToken returned in response.")
+                          return False
+              except Exception as e:
+                  # If any other exceptions which we didn't expect are raised
+                  # then fail and log the exception message.
+                  logger.error(
+                      'Error creating portfolio share for {}!: {}'.format(portfolio_id, e))
+                  raise ('Error creating portfolio share for {}!: {}'.format(portfolio_id, e))
+
+          def describe_portfolio_shares(portfolio_id, org_unit=False):
+              try:
+                  org_units = []
+                  response = sc_client.describe_portfolio_shares(
+                      PortfolioId=portfolio_id,
+                      Type='ORGANIZATIONAL_UNIT'
+                  )
+
+                  if 'PortfolioShareDetails' in response:
+                      for share in response['PortfolioShareDetails']:
+                          org_units.append(share['PrincipalId'])
+
+                      while response.get('NextPageToken', None):
+                          response = sc_client.describe_portfolio_shares(
+                              PortfolioId=portfolio_id,
+                              Type='ORGANIZATIONAL_UNIT',
+                              PageToken=response['NextPageToken']
+                          )
+                          for share in response['PortfolioShareDetails']:
+                              org_units.append(share['PrincipalId'])
+                      return org_units
+                  else:
+                      logger.warning("No existing organizational unit portfolio shares found for {}".format(portfolio_id))
+              except Exception as e:
+                  # If any other exceptions which we didn't expect are raised
+                  # then fail and log the exception message.
+                  logger.error(
+                      'Error describing portfolio share for {}!: {}'.format(portfolio_id, e))
+                  raise ('Error describing portfolio share for {}!: {}'.format(portfolio_id, e))
+                    
+          def create_portfolio_share(portfolio_id, org_unit=None):
+              try:  
+                  response = sc_client.create_portfolio_share(
+                      PortfolioId=portfolio_id,
+                      OrganizationNode={
+                          'Type': 'ORGANIZATIONAL_UNIT',
+                          'Value': org_unit
+                      },
+                      ShareTagOptions=True,
+                      SharePrincipals=True
+                  )
+
+                  if 'PortfolioShareToken' in response:
+                      status = get_share_status(response['PortfolioShareToken'])
+                      if status:
+                          return True
+                      else:
+                          return False
+              except Exception as e:
+                  # If any other exceptions which we didn't expect are raised
+                  # then fail and log the exception message.
+                  logger.error(
+                      'Error creating portfolio share for {}!: {}'.format(portfolio_id, e))
+                  raise ('Error creating portfolio share for {}!: {}'.format(portfolio_id, e))
+
+          def lambda_handler(event,context):
+              logger.info(event)
+              logger.info(context)
+              try:
+                  if event['RequestType'] == 'Delete':
+                      logger.info("Received a Delete Request...")
+                      responseStatus = "SUCCESS"
+                      responseData = {}
+                  elif event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      logger.info(f"Received a {event['RequestType']} Request...")
+                      responseData = {}
+                      responseStatus = "SUCCESS"
+                      target_ous = organizational_unit.split(",")
+                      existing_portfolio_share_ous = describe_portfolio_shares(custodian_hub_portfolio_id, org_unit=True)
+                      logger.info("Existing portfolio shares for {} are: {}".format(custodian_hub_portfolio_id, existing_portfolio_share_ous))
+                      # delete org unit shares that aren't targeted
+                      for existing_share_ou in existing_portfolio_share_ous:
+                          logger.info("existing share OU is {}".format(existing_share_ou))
+                          logger.info("target OUs is {}".format(target_ous))
+
+                          if ( existing_share_ou not in target_ous ):
+                              delete_portfolio_share(PORTFOLIO_ID, org_unit=existing_share_ou)
+                      for org_unit in target_ous:
+                        if org_unit in existing_portfolio_share_ous:
+                            continue
+                        else:
+                            logger.info('Creating portfolio share for org unit: {}'.format(org_unit))
+                            status = create_portfolio_share(custodian_hub_portfolio_id, org_unit=org_unit)
+                            if status:
+                                logger.info('Created portfolio share for org unit: {}'.format(org_unit))
+                            else:
+                                logger.info('Error creating portfolio share for org unit: {}'.format(org_unit))
+              except Exception as exp:
+                  responseStatus = "FAILED"
+                  responseData = {}
+                  exception_type, exception_value, exception_traceback = sys.exc_info()
+                  traceback_string = traceback.format_exception(exception_type, exception_value, exception_traceback)
+                  err_msg = json.dumps({
+                      "errorType": exception_type.__name__,
+                      "errorMessage": str(exception_value),
+                      "stackTrace": traceback_string
+                  })
+                  logger.error(err_msg)
+              sendResponse(event, context, responseStatus, responseData)
+Outputs:
+  CustodianPortfolio:
+    Description: The Portfolio name that will be used for the Custodian automation
+    Value: !GetAtt CustodianHubPortfolio.PortfolioName

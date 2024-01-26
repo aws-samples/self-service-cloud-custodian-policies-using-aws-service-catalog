@@ -1,0 +1,27 @@
+Resources:
+    CustodianLambdaRole:
+        Type: 'AWS::IAM::Role'
+        Properties:
+            RoleName: Custodian.Lambda_Role_{{ PolicyName }}
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service:
+                            - lambda.amazonaws.com
+                      Action:
+                            - 'sts:AssumeRole'
+            ManagedPolicyArns:
+              - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+            Policies:
+                - PolicyName: {{ PolicyName }}
+                  PolicyDocument:
+                    Version: 2012-10-17
+                    Statement:
+                        {% for each_policy in Permissions %}
+                        - Effect: Allow
+                          Action: {{ each_policy.Action }}
+                          Resource: {{ each_policy.Resource }}
+                        {% endfor %}
+

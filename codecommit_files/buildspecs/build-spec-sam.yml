@@ -1,0 +1,42 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing Cloud Custodian..."
+      - pip install c7n
+      - echo "Cloud Custodian installed."
+      - echo "Install git remote codecommit..."
+      - pip install git-remote-codecommit
+      - pip install hiyapyco
+  build:
+    commands:
+      - echo "Determining the policy file changes..."
+      - echo $CODEBUILD_SOURCE_REPO_URL
+      - git clone codecommit::us-east-1://$Custodian_Repo custodian-repo
+      - cd custodian-repo
+      - files_changed=$(git diff --name-only HEAD~ HEAD)
+      - echo $files_changed
+      - custodian_policy_folders=`ls cc_policies`
+      - custodian_template_bucket=$Custodian_Template_Bucket
+      - |
+        for each_policy_folder in $custodian_policy_folders; do
+          modified_custodian_policy=$(git diff --name-only HEAD~ HEAD | grep -E $each_policy_folder)
+          echo $modified_custodian_policy
+          if [ ! -z $modified_custodian_policy ];
+            then
+              echo "Custodian run for the policy $each_policy_folder..."
+              cd cc_policies
+              policy_file=`ls $each_policy_folder | grep 'yml' | grep -v 'permissions.yml'`
+              cd ..
+              python3 scripts/convert_policy_to_sam_cfn.py $each_policy_folder cc_policies/$each_policy_folder/$policy_file cc_policies/$each_policy_folder/permissions.yml $custodian_template_bucket
+          fi
+        done
+
+artifacts:
+  files:
+    - '**/*'
+    

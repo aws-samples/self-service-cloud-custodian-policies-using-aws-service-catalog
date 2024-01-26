@@ -1,0 +1,27 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing Cloud Custodian..."
+      - pip install c7n
+      - echo "Cloud Custodian installed."
+  build:
+    commands:
+      - echo "Running Cloud Custodian validation..."
+      - custodian_policy_folders=`ls cc_policies`
+      - |
+        for each_policy_folder in $custodian_policy_folders; do
+          cd cc_policies
+          policy_file=`ls $each_policy_folder | grep 'yml' | grep -v 'permissions.yml'`
+          cd ..
+          python3 scripts/validate_policy_file.py cc_policies/$each_policy_folder/$policy_file
+        done
+
+artifacts:
+  files:
+    - '**/*'
+  
