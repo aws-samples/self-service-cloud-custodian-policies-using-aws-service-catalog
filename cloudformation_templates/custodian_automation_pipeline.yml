@@ -27,9 +27,11 @@ Parameters:
   pSCTemplateS3Bucket:
     Description: The s3 Bucket that will hold the Cloudformation template for the custodian service catalog product
     Type: String
+    AllowedPattern: ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$
   pSCTemplateS3LoggingBucket:
     Description: The S3 Bucket that will be logging bucket for the Custodian policy bucket
     Type: String
+    AllowedPattern: ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$
   pSCPortfolioName:
     Description: The Portfolio that will hold the custodian service catalog products. 
     Type: String
@@ -49,9 +51,11 @@ Parameters:
   pCodepipelineArtifactBucket:
     Description: The S3 bucket that will hold the codepipeline artifacts
     Type: String
+    AllowedPattern: ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$
   pOrganizationID:
     Description: The Organization ID to allow GetObject for template s3 Bucket
     Type: String
+    AllowedPattern: ^o-[a-z0-9]{10,32}$
 Resources:
   # Custodian Service catalog Infrastructure Resources
   rCustodianSCTemplateBucket:
