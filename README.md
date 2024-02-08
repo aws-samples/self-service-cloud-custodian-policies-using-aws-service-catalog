@@ -27,7 +27,13 @@ This solution shows how to enable Self Service capability for Custodian policy l
 
 * Ensure Trusted Access is Enabled for Service Catalog. Review the [steps](https://docs.aws.amazon.com/organizations/latest/userguide/services-that-can-integrate-servicecatalog.html) to enable trusted access for service catalog.
 
-* Ensure the Service catalog account is enabled as Delegated administrator account for AWS Service Catalog in the Organizations Management Account
+* Ensure the Service catalog account is enabled as Delegated administrator account for AWS Service Catalog in the Organizations Management Account. Run the below CLI command to register an account as delegated admin from the Organizations Management Account. 
+
+```
+aws organizations register-delegated-administrator \
+    --account-id service-catalog-account-id \
+    --service-principal servicecatalog.amazonaws.com
+```
 
 * The solution requires Service catalog portfolio provisioned in the Service catalog delegated admin account with porfolio sharing enabled. Provision Portofolio as CloudFormation stack leveraging the [Portfolio template](./cloudformation_templates/sc_custodian_portfolio.yml)
 
