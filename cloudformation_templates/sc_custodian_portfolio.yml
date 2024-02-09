@@ -101,6 +101,9 @@ Resources:
                   - "organizations:ListChildren"
                 Resource: "*"
               - Effect: Allow
+                Action: "servicecatalog:DescribePortfolioShareStatus"
+                Resource: "*"
+              - Effect: Allow
                 Action:
                   - "servicecatalog:CreatePortfolioShare"
                   - "servicecatalog:DeletePortfolioShare"
@@ -213,7 +216,7 @@ Resources:
                   error = ['COMPLETED_WITH_ERRORS', 'ERROR']
                   if 'Status' in response:
                       while response.get('Status', None) in keep_checking:
-                          sleep(2)
+                          time.sleep(2)
                           response = sc_client.describe_portfolio_share_status(
                               PortfolioShareToken=share_token
                           )
@@ -333,7 +336,7 @@ Resources:
                           logger.info("target OUs is {}".format(target_ous))
 
                           if ( existing_share_ou not in target_ous ):
-                              delete_portfolio_share(PORTFOLIO_ID, org_unit=existing_share_ou)
+                              delete_portfolio_share(custodian_hub_portfolio_id, org_unit=existing_share_ou)
                       for org_unit in target_ous:
                         if org_unit in existing_portfolio_share_ous:
                             continue
