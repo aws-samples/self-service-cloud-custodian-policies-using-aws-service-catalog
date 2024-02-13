@@ -69,6 +69,8 @@ Resources:
               - "events:DescribeRule"
               - "events:DescribeRule"
               - "events:PutTargets"
+              - "events:RemoveTargets"
+              - "events:DeleteRule"
             Sid: EventBridgeRuleCreationPermission
           - Effect: Allow
             Resource:

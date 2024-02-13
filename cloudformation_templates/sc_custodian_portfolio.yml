@@ -19,7 +19,9 @@ Parameters:
   TargetOU:
     Type: String
     Description: Organization Unit (OU) id to which the Custodian Portfolio needs to be shared, More than one OU can be used and should be comma separated
-
+    Default: ou-xxxxxxxxxxxxxxxxxxxx
+    AllowedPattern: ^ou-[a-z0-9]{32}$
+  
   PortfolioName:
     Type: String
     Description: The Portfolio name for the portfolio that will host the Custodian portfolio

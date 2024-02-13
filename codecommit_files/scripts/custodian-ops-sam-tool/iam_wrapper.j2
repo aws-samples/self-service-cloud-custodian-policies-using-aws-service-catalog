@@ -2,7 +2,7 @@ Resources:
     CustodianLambdaRole:
         Type: 'AWS::IAM::Role'
         Properties:
-            RoleName: Custodian.Lambda_Role_{{ PolicyName }}
+            RoleName: custodian-lambda-role-{{ PolicyName }}
             AssumeRolePolicyDocument:
                 Version: 2012-10-17
                 Statement:

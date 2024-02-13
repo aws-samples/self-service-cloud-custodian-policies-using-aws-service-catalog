@@ -533,8 +533,6 @@ Resources:
               - codepipeline.amazonaws.com
 
   rCodePipelinePolicy:
-    DependsOn: 
-      - rCFExecutionPolicy
     Type: AWS::IAM::ManagedPolicy
     Metadata:
         cfn_nag:
@@ -621,19 +619,6 @@ Resources:
               - codebuild:BatchGetBuilds
             Resource:
               - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/*"
-          # -  # Allow code build to assume deployment role
-          #   Sid: AssumeDeploymentRolePolicy
-          #   Effect: Allow
-          #   Action:
-          #     - sts:AssumeRole
-          #   Resource:
-          #     - !GetAtt rCFExecutionRole.Arn
-          # -  # To create CF stack for serverless deployment
-          #   Sid: CloudFormationFullAccess
-          #   Effect: Allow
-          #   Action:
-          #     - cloudformation:*
-          #   Resource: '*'
 
   rCodePipelineEventRole:
     Type: AWS::IAM::Role
@@ -750,112 +735,6 @@ Resources:
     Properties:
       AliasName: alias/custodianblog/codepipeline-key
       TargetKeyId: !GetAtt rCodePipelineKMSKey.Arn
-
-
-  # rCFExecutionRole:
-  #   Type: AWS::IAM::Role
-  #   Metadata:
-  #       cfn_nag:
-  #         rules_to_suppress:
-  #           - id: W28
-  #             reason: Explicit naming allowed for this particular resource
-  #   Properties:
-  #     RoleName: !Sub ${pPipelineName}-cf-execution-role
-  #     AssumeRolePolicyDocument:
-  #       Version: 2012-10-17
-  #       Statement:
-  #         -
-  #           Effect: Allow
-  #           Principal:
-  #             AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
-  #             Service:
-  #               - cloudformation.amazonaws.com
-  #           Action:
-  #             - sts:AssumeRole
-
-  # rCFExecutionPolicy:
-  #   Type: AWS::IAM::ManagedPolicy
-  #   Metadata:
-  #       cfn_nag:
-  #         rules_to_suppress:
-  #           - id: W28
-  #             reason: Explicit naming allowed for this particular resource
-  #           - id: W11
-  #             reason: Required in this case
-  #           - id: W12
-  #             reason: Required in this case
-  #           - id: W13
-  #             reason: Required in this case. Added condition constraint to restrict access within Organization
-  #           - id: F40
-  #             reason: Added condition constraint to restrict access within Organization
-  #           - id: F5
-  #             reason: Required in this case
-  #   Properties:
-  #     Description: Allows pipeline in master account to deploy Lambda
-  #     ManagedPolicyName: !Sub ${pPipelineName}-cf-execution-policy
-  #     Roles:
-  #       - !Ref rCFExecutionRole
-  #     PolicyDocument:
-  #       Version: 2012-10-17
-  #       Statement:
-  #         -  # Allow codepipeline to perform encryption and decryption on artifacts deployed to Serverless Deployment bucket
-  #           Sid: KMSPolicy
-  #           Effect: Allow
-  #           Action:
-  #             - kms:DescribeKey
-  #             - kms:GetKeyPolicy
-  #             - kms:List*
-  #             - kms:Encrypt
-  #             - kms:Decrypt
-  #             - kms:ReEncrypt*
-  #             - kms:Generate*
-  #           Resource:
-  #             - !GetAtt rCodePipelineKMSKey.Arn
-  #         - Sid: IAMRolesPermissions
-  #           # Needed for creating Roles for Lambdas, EC2 instances and other services
-  #           Effect: Allow
-  #           Action:
-  #             - iam:Get*
-  #             - iam:List*
-  #             - iam:*Role*
-  #             - iam:CreatePolicy
-  #             - iam:DeletePolicy
-  #             - iam:*PolicyVersion*
-  #             - iam:*InstanceProfile*
-  #           Resource: '*'
-  #         - Sid: S3FullAccess
-  #           # To Get and Put deployment artifacts in serverless deployment bucket
-  #           Effect: Allow
-  #           Action:
-  #             - s3:*
-  #           Resource: '*'
-  #         -  # To create CF stack for serverless deployment
-  #           Sid: CloudFormationFullAccess
-  #           Effect: Allow
-  #           Action:
-  #             - cloudformation:*
-  #           Resource: '*'
-  #         - # Lambda Full Access
-  #           Sid: LambdaFullAccess
-  #           Effect: Allow
-  #           Action:
-  #             - lambda:*
-  #           Resource: '*'
-  #         - Sid: Cloudwatch
-  #           # To access cloudwatch logs
-  #           Effect: Allow
-  #           Action:
-  #             - cloudwatch:*
-  #             - logs:*
-  #             - events:*
-  #           Resource: '*'
-  #         - # CodeDeploy Full Access for SAM deployment
-  #           Sid: CodeDeployFullAccess
-  #           Effect: Allow
-  #           Action:
-  #             - codedeploy:*
-  #           Resource: '*'
-
   
   ##############  CODE BUILD CODE BEGINS ####################
 
