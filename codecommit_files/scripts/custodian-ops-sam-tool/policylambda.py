@@ -177,13 +177,10 @@ def setup_parser():
 
 
 def add_custodian_role(samtemplate, options):
-    # templateLoader = FileSystemLoader(searchpath="./")
     templateLoader = FileSystemLoader(searchpath=options.IamWrapper)
     env = Environment(loader=templateLoader)
 
     template = env.get_template('iam_wrapper.j2')
-
-    # with open("permissions.yml") as file:
     with open(options.PermissionFile) as file:
         permissions = yaml.safe_load(file)
         role_output = template.render(PolicyName=permissions['PolicyName'], Permissions=permissions['Permissions'])

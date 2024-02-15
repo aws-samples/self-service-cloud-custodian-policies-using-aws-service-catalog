@@ -1,57 +1,27 @@
-# ucxar-sam-tool
-The Nike UCX version of [Custodian ops tool](https://github.com/cloud-custodian/cloud-custodian/blob/main/tools/ops/policylambda.py) that contains the Script required to transform the Custodian Policy to SAM template for Service catalog deployment. 
+# custodian-ops-sam-tool
+The [Custodian ops tool](https://github.com/cloud-custodian/cloud-custodian/blob/main/tools/ops/policylambda.py) that contains the Script required to transform the Custodian Policy to SAM template for Service catalog deployment. 
 
-The Tool takes in the Custodian policy and IAM permissions yaml file and trasforms the template into the SAM Template which contains both the IAM Role and Lambda function as Service Catalog Product. This Tool will be used as part of the [ucx policy generator build](https://github.com/nike-ucx/ucxar-cc-policies/blob/develop/build.py)
-
-The SAM template supports a parameter called ```Actions``` which can be either Notify or Remediate if the Custodian Policy supports both the action , if not it supports only Notify if the Custodian Policy supports only the ```Notify``` action. 
+The Tool is modified as part of this sam tool that takes in the Custodian policy and IAM permissions yaml file to trasform the template into the SAM Template which contains both the IAM Role and Lambda function as Service Catalog Product. 
 
 ## Usage 
 
-Clone the repository
+This script is being used part of the custodian sam to cfn convert codebuild stage where it takes the Custodian policy and converts it to Cloudformation SAM template with the IAM role wrapped part of the template. Some of the key pointers to consider when adding the custodian policy and permissions file 
+
+1. Each custodian policy and its related permissions should be in a separate folder for e.g., encrypted-volumes , and the same name used for the policy-name.yml . 
+2. Custodian policy IAM role should have a naming convention custodian-lambda-role-{{ PolicyName }} e.g., custodian-lambda-role-encrypted-volumes
+3. The permissions.yml can have list of actions and resources in the below format , the PolicyName should be same as the one used for the folder and also for the policy-name.yml. 
 
 ```
-git clone git@github.com:nike-ucx/ucxar-sam-tool.git 
-
-cd ucxar-sam-tool
-```
-
-Install Dependencies 
-
-```
-$ virtualenv ops_tool 
-$ source ops_tool/bin/activate
-$ pip install -r requirements.txt
-```
-
-To Transform the policy file to SAM template 
-
-Pre-req 
-* The file permissions.yml is present in the root in the below format 
-
-```
-PolicyName:
+PolicyName: "encrypted-volumes"
 Permissions:
   - Action:
-    - <list of IAM actions>
+      - "ec2:Describe*"
+      - "ec2:TerminateInstances"
     Resource:
-    - <list of resources to act upon>
+      - "*"
   - Action:
-    - <list of IAM actions>
+      - "ec2:CreateTags"
+      - "ec2:DeleteTags"
     Resource:
-    - <list of resources to act upon>
-```
-
-* The Custodian policy should be present in root folder as well. 
-
-Run the following commands 
-
-```
-$ mkdir sam-deploy
-$ python policylambda.py -o sam-deploy -c policies.yml -a notify (optional)
-
--a notify  to be passed only when the Policy supports only Notify. 
-
-$ cd sam-deploy
-$ aws cloudformation package --template-file policy_sam.yml --s3-bucket mybucket --output-template-file <policy name>.yml 
-  --s3-prefix ServiceCatalogCodeuri   --metadata policy=<policy name>,PolicyStakeHolder=<policy stakholder>,version=1
+      - "*"
 ```

@@ -56,7 +56,7 @@ aws organizations put-resource-policy \
 
 * Clone the code commit repository created as part of the Infrastructure Provisioning. 
 
-* Copy all the codecommit-files from this repository to the cloned code commit repository. 
+* Copy all the codecommit-files from this repository to the cloned code commit repository. To understand the custodian policy to be added and the permission review the custodain ops sam tool [readme](./codecommit_files/scripts/custodian-ops-sam-tool/README.md)
 
 * Create a sub folder in the cc_policies which will be used as Service catalog Product Name.The Folder should contain custodian policy YAML file and permissions.yml that will contain permissions for the Lambda Role. 
 
