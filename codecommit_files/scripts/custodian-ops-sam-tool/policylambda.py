@@ -178,7 +178,7 @@ def setup_parser():
 
 def add_custodian_role(samtemplate, options):
     templateLoader = FileSystemLoader(searchpath=options.IamWrapper)
-    env = Environment(loader=templateLoader)
+    env = Environment(autoescape=True,loader=templateLoader)
 
     template = env.get_template('iam_wrapper.j2')
     with open(options.PermissionFile) as file:
