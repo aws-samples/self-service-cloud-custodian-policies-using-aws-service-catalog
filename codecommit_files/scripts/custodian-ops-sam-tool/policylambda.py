@@ -178,11 +178,7 @@ def setup_parser():
 
 def add_custodian_role(samtemplate, options):
     templateLoader = FileSystemLoader(searchpath=options.IamWrapper)
-<<<<<<< HEAD
-    env = Environment(loader=templateLoader) #nosec
-=======
     env = Environment(autoescape=select_autoescape( disabled_extensions=('.j2',), default_for_string=True, default=True),loader=templateLoader)
->>>>>>> 65c95b3 (fixing the autoescape sec findings)
 
     template = env.get_template('iam_wrapper.j2')
     with open(options.PermissionFile) as file:
