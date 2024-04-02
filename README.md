@@ -38,10 +38,8 @@ aws organizations register-delegated-administrator \
 * Run the below CLI command to add a custom policy that allows delegated admin account to query accounts within the Organization (replace {service catalog account} with the 12-digit Account ID). The command should be run on the Organizations Management Account. 
 
 ```
-# This cmd require CLI 2.10+
-aws organizations put-resource-policy \
---content "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"Statement\",\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::{service_catalog_account_ID}:root\"},\"Action\":[\"organizations:ListDelegatedAdministrators\",\"organizations:ListParents\",\"organizations:ListChildren\",\"organizations:DescribeAccount\"],\"Resource\":\"*\"}]}"
-
+# This command require CLI 2.10+
+aws organizations put-resource-policy --content '{"Version": "2012- 10-17","Statement": [{"Sid": "Statement","Effect": "Allow","Principal": {"AWS": "arn:aws:iam::'"${service_catalog_account_ID}"':root"},"Action": ["organizations:ListDelegatedAdministrators","organizations:ListParents","organizations:ListChildren","organizations:DescribeAccount"],"Resource": "*"}]}'
 ```
 
 * The solution requires Service catalog portfolio provisioned in the Service catalog delegated admin account with porfolio sharing enabled. Provision Portofolio as CloudFormation stack leveraging the [Portfolio template](./cloudformation_templates/sc_custodian_portfolio.yml)
