@@ -1,0 +1,9 @@
+PolicyName: "encrypted-volumes"
+Permissions:
+  - Action:
+      - "ec2:Describe*"
+      - "ec2:TerminateInstances"
+      - "ec2:CreateTags"
+      - "ec2:DeleteTags"
+    Resource:
+      - "*"
