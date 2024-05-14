@@ -1,5 +1,11 @@
+The self-service-cloud-custodian-policies-using-service-catalog project includes the following third-party software/licensing:
 
 ** Cloud-custodian: https://github.com/cloud-custodian/cloud-custodian
+** Cloud-custodian Ops Tools: https://github.com/cloud-custodian/cloud-custodian/blob/main/tools/ops/policylambda.py
+
+** Cloud Custodian Policies: 
+https://github.com/cloud-custodian/cloud-custodian/blob/5fbf126a4f30e63e37d2ffecdd0d8cd9abf31800/docs/source/aws/lambda.rst#L100
+https://github.com/cloud-custodian/cloud-custodian/blob/5fbf126a4f30e63e37d2ffecdd0d8cd9abf31800/docs/source/aws/examples/ec2-auto-tag-user.rst#L9
 
 
                                  Apache License
